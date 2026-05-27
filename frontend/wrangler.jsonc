@@ -1,0 +1,45 @@
+/**
+ * Cloudflare Workers config for the OpenNext deployment of Mike's Next.js app.
+ * Consumed by `npm run deploy` (frontend/package.json) which runs
+ *   opennextjs-cloudflare build && opennextjs-cloudflare deploy
+ *
+ * Set secrets after first deploy:
+ *   wrangler secret put NEXT_PUBLIC_SUPABASE_URL
+ *   wrangler secret put NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY
+ *   wrangler secret put NEXT_PUBLIC_API_BASE_URL
+ *   wrangler secret put R2_ENDPOINT_URL
+ *   wrangler secret put R2_ACCESS_KEY_ID
+ *   wrangler secret put R2_SECRET_ACCESS_KEY
+ *   wrangler secret put R2_BUCKET_NAME
+ *
+ * NEXT_PUBLIC_* values are inlined at build time, so they must also be present
+ * as plain env vars (or `vars`) during `opennextjs-cloudflare build`.
+ *
+ * Named environments give us isolated Workers per deploy target:
+ *   npm run deploy:staging     -> worker "mike-frontend-staging"
+ *   npm run deploy:production  -> worker "mike-frontend-production"
+ * Top-level config (main, assets, compatibility_*) is inherited by both.
+ * The bare top-level `name` is only used by a plain `deploy` with no --env.
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mike-frontend",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-03-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": ".open-next/assets"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "env": {
+    "staging": {
+      "name": "mike-frontend-staging"
+    },
+    "production": {
+      "name": "mike-frontend-production"
+    }
+  }
+}

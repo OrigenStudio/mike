@@ -1,0 +1,168 @@
+name: CI/CD
+
+# Single-pane CI/CD for the Mike monorepo, with two fully isolated environments.
+#
+#   PR -> main or staging   ci-backend + ci-frontend (build / lint / typecheck) only.
+#   push to staging         CI, then deploy changed package(s) to the STAGING env.
+#   push to main            CI, then deploy changed package(s) to the PRODUCTION env.
+#   "Run workflow"          manual deploy; target env follows the branch you run it from.
+#
+# The deploy jobs pick their GitHub Environment from the branch, so the SAME secret
+# names resolve to different values per environment. Configure these under
+# Settings -> Environments -> (staging | production):
+#
+#   Environment secrets (set in BOTH environments, with each env's own values):
+#     NEXT_PUBLIC_SUPABASE_URL                      baked into the frontend bundle
+#     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY  Supabase anon/public key
+#     NEXT_PUBLIC_API_BASE_URL                      public URL of that env's backend
+#     RAILWAY_TOKEN                                 Railway *project* token for that env
+#
+#   Environment variable (set in BOTH environments):
+#     RAILWAY_SERVICE                               backend service name in that env
+#
+#   Repository-level secrets (shared across environments — same Cloudflare account):
+#     CLOUDFLARE_API_TOKEN                          token with "Edit Workers"
+#     CLOUDFLARE_ACCOUNT_ID                         Cloudflare account id
+#
+# Cloudflare worker names come from frontend/wrangler.jsonc env blocks:
+#     staging    -> mike-frontend-staging
+#     production -> mike-frontend-production
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main, staging]
+  workflow_dispatch:
+
+# Cancel superseded PR runs; never cancel an in-flight deploy.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Detect which package changed, to gate the deploy jobs.
+  # --------------------------------------------------------------------------
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+
+  # --------------------------------------------------------------------------
+  # CI: backend (always runs — safe to mark as a required status check)
+  # --------------------------------------------------------------------------
+  ci-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - name: Typecheck / build (tsc)
+        run: npm run build
+
+  # --------------------------------------------------------------------------
+  # CI: frontend (always runs — safe to mark as a required status check)
+  # Placeholder NEXT_PUBLIC_* values: the build only needs them to be non-empty
+  # so the Supabase client constructed at module load does not throw.
+  # --------------------------------------------------------------------------
+  ci-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY: placeholder-anon-key
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Build (next)
+        run: npm run build
+
+  # --------------------------------------------------------------------------
+  # CD: backend -> Railway (Nixpacks builds remotely; LibreOffice baked in)
+  # Target env = production on main, staging otherwise. Secrets/vars resolve
+  # from the matching GitHub Environment.
+  # --------------------------------------------------------------------------
+  deploy-backend:
+    needs: [changes, ci-backend]
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      (github.ref_name == 'main' || github.ref_name == 'staging') &&
+      (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true')
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli
+      - name: Deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --service "${{ vars.RAILWAY_SERVICE }}" --ci
+
+  # --------------------------------------------------------------------------
+  # CD: frontend -> Cloudflare Workers (OpenNext build, then wrangler deploy)
+  # NEXT_PUBLIC_* are inlined into the bundle here, so real values are required.
+  # `npm run deploy:<env>` targets the matching wrangler env block.
+  # --------------------------------------------------------------------------
+  deploy-frontend:
+    needs: [changes, ci-frontend]
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      (github.ref_name == 'main' || github.ref_name == 'staging') &&
+      (github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true')
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY }}
+      NEXT_PUBLIC_API_BASE_URL: ${{ secrets.NEXT_PUBLIC_API_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Build & deploy (OpenNext + Wrangler)
+        run: npm run deploy:${{ github.ref_name == 'main' && 'production' || 'staging' }}
