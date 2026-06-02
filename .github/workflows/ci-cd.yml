@@ -168,6 +168,11 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      # OpenNext detects frontend/bun.lock and tries `bun run build`; install
+      # bun so that path works. (We still use npm ci for our own install.)
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
       - run: npm ci
       - name: Build & deploy (OpenNext + Wrangler)
         run: npm run deploy:${{ github.ref_name == 'main' && 'production' || 'staging' }}
