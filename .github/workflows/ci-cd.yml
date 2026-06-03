@@ -163,9 +163,11 @@ jobs:
       NEXT_PUBLIC_API_BASE_URL: ${{ secrets.NEXT_PUBLIC_API_BASE_URL }}
     steps:
       - uses: actions/checkout@v5
+      # Wrangler 4 requires Node 22+ at deploy time. (ci-frontend still uses
+      # Node 20 — that's only for typecheck/build, not the wrangler invocation.)
       - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       # OpenNext detects frontend/bun.lock and tries `bun run build`; install
