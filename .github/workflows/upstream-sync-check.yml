@@ -1,0 +1,86 @@
+name: Upstream sync check
+
+# Checks the upstream fork (willchen96/mike) for new commits and opens (or
+# updates) a single GitHub issue listing them. Runs weekly; nothing fires if
+# upstream has no new commits.
+#
+# Dedup logic: a single open issue titled `[upstream-sync] …` is reused across
+# runs — the body is rewritten with each check so you always see the latest
+# state. Close the issue manually once you've reviewed/cherry-picked.
+
+on:
+  schedule:
+    - cron: "0 9 * * 1" # Mondays 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/willchen96/mike.git
+          git fetch upstream main --quiet
+      - name: Compare with upstream
+        id: diff
+        run: |
+          AHEAD=$(git rev-list --count upstream/main..origin/main)
+          BEHIND=$(git rev-list --count origin/main..upstream/main)
+          {
+            echo "ahead=$AHEAD"
+            echo "behind=$BEHIND"
+          } >> "$GITHUB_OUTPUT"
+          echo "fork is $AHEAD commit(s) ahead of upstream, $BEHIND commit(s) behind"
+      - name: Build issue body
+        if: steps.diff.outputs.behind != '0'
+        run: |
+          ORIGIN_HEAD=$(git rev-parse origin/main)
+          {
+            printf '## Upstream has **%s** new commit(s)\n\n' "${{ steps.diff.outputs.behind }}"
+            printf 'willchen96/mike has moved ahead of OrigenStudio/mike since the last sync.\n\n'
+            printf '- **Compare on GitHub:** https://github.com/willchen96/mike/compare/%s...main\n' "$ORIGIN_HEAD"
+            printf '- **Our fork ahead of upstream:** %s commit(s) (kept on our side)\n' "${{ steps.diff.outputs.ahead }}"
+            printf '\n### New upstream commits\n\n'
+            git log --no-merges --pretty=format:'- `%h` %s — _%an, %ad_' --date=short origin/main..upstream/main
+            printf '\n\n### Suggested next step\n\n'
+            printf '- Skim each commit. For anything you want, cherry-pick into a branch off `staging` and open a PR:\n'
+            printf '  ```bash\n'
+            printf '  git fetch upstream\n'
+            printf '  git checkout -b chore/upstream-sync-$(date -u +%%Y%%m%%d) staging\n'
+            printf '  git cherry-pick <commit-sha>\n'
+            printf '  git push -u origin HEAD\n'
+            printf '  ```\n'
+            printf '- Once cherry-picked into `staging`, validate, then promote to `main` via the usual PR.\n'
+            printf '\n_This issue is auto-generated weekly. Close it once you have reviewed; it will be reopened (with a fresh body) next Monday if upstream still has unreviewed commits._\n'
+          } > /tmp/body.md
+      - name: Open or update upstream-sync issue
+        if: steps.diff.outputs.behind != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="[upstream-sync] willchen96/mike has ${{ steps.diff.outputs.behind }} new commit(s)"
+          # Find an existing open issue we've created; match on title prefix.
+          EXISTING=$(gh issue list --repo "${{ github.repository }}" \
+            --state open --limit 50 \
+            --json number,title \
+            --jq '.[] | select(.title | startswith("[upstream-sync]")) | .number' \
+            | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --repo "${{ github.repository }}" \
+              --title "$TITLE" --body-file /tmp/body.md
+            echo "Updated existing issue #$EXISTING"
+          else
+            gh issue create --repo "${{ github.repository }}" \
+              --title "$TITLE" --body-file /tmp/body.md
+            echo "Opened new issue"
+          fi
+      - name: No upstream changes (no-op)
+        if: steps.diff.outputs.behind == '0'
+        run: echo "Upstream has not moved since last sync — nothing to do."
