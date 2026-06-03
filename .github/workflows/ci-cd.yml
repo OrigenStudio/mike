@@ -60,8 +60,10 @@ jobs:
           filters: |
             backend:
               - 'backend/**'
+              - '.github/workflows/**'
             frontend:
               - 'frontend/**'
+              - '.github/workflows/**'
 
   # --------------------------------------------------------------------------
   # CI: backend (always runs — safe to mark as a required status check)
