@@ -122,3 +122,95 @@ npm run build --prefix backend
 npm run build --prefix frontend
 npm run lint --prefix frontend
 ```
+
+---
+
+## Deployment architecture (Origen Studio fork)
+
+> This section is specific to this fork and does not appear in upstream
+> `willchen96/mike`. Edit-once / merge-clean: stays at the end of the file.
+
+We deploy Mike across three managed platforms today (Cloudflare, Railway,
+Supabase), with a fourth (Fly.io) planned for the privacy gateway.
+
+### Status legend
+
+- ✅ **Live in production**
+- 🟡 **Staging only** (production paused at the approval gate)
+- 🔵 **Planned** (repo + config exist; not yet deployed)
+
+### Diagram
+
+```
+                           ┌──────────────────────────┐
+                           │     Browser (user)       │
+                           └─────────────┬────────────┘
+                                         │ HTTPS
+                ┌────────────────────────┴────────────────────────┐
+                │  Cloudflare Workers (global edge)        🟡 / ✅ │
+                │  mike-frontend-staging                          │
+                │  mike-frontend-production                       │
+                │  Built by @opennextjs/cloudflare from Next 16   │
+                └────────────────────────┬────────────────────────┘
+                                         │ HTTPS · NEXT_PUBLIC_API_BASE_URL
+                ┌────────────────────────┴────────────────────────┐
+                │  Railway · europe-west4 (Amsterdam)      🟡 / ✅ │
+                │  mike-backend (Express, Nixpacks + LibreOffice) │
+                └──┬──────────────────┬──────────────────┬────────┘
+                   │                  │                  │
+        ┌──────────┘                  │ S3 SDK           └──────────────┐
+        │ HTTPS                       │                                 │ HTTPS  🔵
+        ↓                             ↓                                 ↓
+┌───────────────────┐    ┌─────────────────────────┐    ┌──────────────────────────────┐
+│  Supabase Cloud   │    │     Cloudflare R2       │    │  Hey Jude (Fly.io · ams)     │
+│  eu-west-1        │    │  EU jurisdiction        │    │  mike-hey-jude               │
+│  Auth + Postgres  │    │  mike-staging           │    │  (privacy proxy / PII)       │
+│  mike-staging     │    │  mike-prod              │    │  OrigenStudio/hey-jude (priv)│
+│  mike-prod        │    │                         │    └──────────────┬───────────────┘
+└───────────────────┘    └─────────────────────────┘                   │
+                                                          internal 6PN │ HTTPS · anonymized
+                                                                       │ prompts only
+                                                       ┌───────────────┴────────────┐
+                                                       │                            │
+                                                       ↓                            ↓
+                                          ┌────────────────────────┐   ┌──────────────────────┐
+                                          │  Ollama (Fly.io · ams) │   │     OpenAI API       │
+                                          │  qwen3:4b · A10 GPU    │   │  (sees placeholders, │
+                                          │  internal-only, no     │   │   never raw PII)     │
+                                          │  public ingress        │   └──────────────────────┘
+                                          │  OrigenStudio/         │
+                                          │  mike-ollama (private) │   🔵
+                                          └────────────────────────┘
+```
+
+### Why this shape
+
+- **Cloudflare Workers** for the frontend → global edge CDN, scale-to-zero,
+  generous free tier. Configured by the repo (`@opennextjs/cloudflare`).
+- **Railway** for the backend → long-running Express, LibreOffice subprocess
+  for DOC/DOCX→PDF, 50 MB upload bodies. Needs a real container, not a
+  serverless function. Nixpacks installs LibreOffice automatically.
+- **Supabase Cloud** for Auth + Postgres → the app is built around Supabase
+  Auth (`auth.uid()` RLS policies in `backend/schema.sql`); swapping it out
+  is a multi-day refactor (see DEPLOY.md §9 notes).
+- **Cloudflare R2** for object storage → S3-compatible API, **zero egress**,
+  EU jurisdiction matches the rest of the stack.
+- **Hey Jude + Ollama on Fly.io** (planned) → strips PII from prompts before
+  they leave our infrastructure. Local LLM (qwen3:4b on GPU) does the
+  context-aware detection; OpenAI never sees raw client data.
+
+### Related repositories
+
+- [`OrigenStudio/hey-jude`](https://github.com/OrigenStudio/hey-jude) — private
+  fork of `sure-scale/hey-jude` with our Fly.io config.
+- [`OrigenStudio/mike-ollama`](https://github.com/OrigenStudio/mike-ollama) —
+  tiny Fly.io app running Ollama with `qwen3:4b`.
+- [`willchen96/mike`](https://github.com/willchen96/mike) — upstream of this
+  fork. A weekly Actions workflow checks for new commits and opens an issue.
+
+### Where to look next
+
+- **End-to-end deploy walkthrough**: [DEPLOY.md](DEPLOY.md)
+- **CI/CD workflow**: [.github/workflows/ci-cd.yml](.github/workflows/ci-cd.yml)
+- **Wrangler / Railway config**: [frontend/wrangler.jsonc](frontend/wrangler.jsonc),
+  [backend/railway.json](backend/railway.json), [backend/nixpacks.toml](backend/nixpacks.toml)
