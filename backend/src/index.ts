@@ -11,6 +11,15 @@ import { tabularRouter } from "./routes/tabular";
 import { workflowsRouter } from "./routes/workflows";
 import { userRouter } from "./routes/user";
 import { downloadsRouter } from "./routes/downloads";
+import { organizationsRouter } from "./routes/organizations";
+import { teamsRouter } from "./routes/teams";
+import { membersRouter } from "./routes/members";
+import { rolesRouter } from "./routes/roles";
+import {
+  invitationsRouter,
+  invitationAcceptRouter,
+} from "./routes/invitations";
+import { locksRouter } from "./routes/locks";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -118,6 +127,15 @@ app.use("/workflows", workflowsRouter);
 app.use("/user", userRouter);
 app.use("/users", userRouter);
 app.use("/download", downloadsRouter);
+
+// Teams / organizations / RBAC (nested routers use mergeParams for :orgId)
+app.use("/organizations/:orgId/teams", teamsRouter);
+app.use("/organizations/:orgId/members", membersRouter);
+app.use("/organizations/:orgId/invitations", invitationsRouter);
+app.use("/organizations/:orgId/roles", rolesRouter);
+app.use("/organizations", organizationsRouter);
+app.use("/invitations", invitationAcceptRouter);
+app.use("/locks", locksRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
