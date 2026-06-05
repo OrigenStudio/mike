@@ -210,6 +210,7 @@ Supabase), with a fourth (Fly.io) planned for the privacy gateway.
 
 ### Where to look next
 
+- **Teams / orgs / collaboration plan**: [docs/TEAMS_AND_ORGS_PLAN.md](docs/TEAMS_AND_ORGS_PLAN.md)
 - **End-to-end deploy walkthrough**: [DEPLOY.md](DEPLOY.md)
 - **CI/CD workflow**: [.github/workflows/ci-cd.yml](.github/workflows/ci-cd.yml)
 - **Wrangler / Railway config**: [frontend/wrangler.jsonc](frontend/wrangler.jsonc),
