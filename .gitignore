@@ -10,6 +10,10 @@ build
 !.env.example
 !.env.local.example
 
+# local deploy credentials & provisioning state — never commit
+.deploy.env
+.deploy.state
+
 *.log
 *.tsbuildinfo
 next-env.d.ts
