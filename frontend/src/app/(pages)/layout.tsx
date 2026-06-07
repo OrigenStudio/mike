@@ -6,6 +6,7 @@ import { PanelLeft } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { ChatHistoryProvider } from "@/app/contexts/ChatHistoryContext";
 import { SidebarContext } from "@/app/contexts/SidebarContext";
+import { OrgProvider } from "@/app/contexts/OrgContext";
 import { AppSidebar } from "@/app/components/shared/AppSidebar";
 
 export default function MikeLayout({
@@ -75,6 +76,7 @@ export default function MikeLayout({
     if (!isAuthenticated) return null;
 
     return (
+        <OrgProvider>
         <ChatHistoryProvider>
             <SidebarContext.Provider
                 value={{
@@ -110,5 +112,6 @@ export default function MikeLayout({
                 </div>
             </SidebarContext.Provider>
         </ChatHistoryProvider>
+        </OrgProvider>
     );
 }
