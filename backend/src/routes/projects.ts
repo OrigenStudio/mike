@@ -9,6 +9,7 @@ import {
 import { downloadFile, uploadFile, storageKey } from "../lib/storage";
 import { docxToPdf, convertedPdfKey } from "../lib/convert";
 import { checkProjectAccess } from "../lib/access";
+import { resolveActiveOrg } from "../lib/tenancy";
 import { singleFileUpload } from "../lib/upload";
 
 export const projectsRouter = Router();
@@ -29,13 +30,20 @@ projectsRouter.get("/", requireAuth, async (req, res) => {
   const userEmail = res.locals.userEmail as string;
   const db = createServerSupabase();
 
-  const { data: ownProjects, error: ownError } = await db
-    .from("projects")
-    .select("*")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false });
-  if (ownError) return void res.status(500).json({ detail: ownError.message });
+  // Active-org view: every project in the org the caller is currently in
+  // (team-wide visibility). Falls back to the personal org when no X-Org-Id.
+  const active = await resolveActiveOrg(req, userId, userEmail, db);
+  const { data: orgProjects, error: orgError } = active
+    ? await db
+        .from("projects")
+        .select("*")
+        .eq("org_id", active.orgId)
+        .order("created_at", { ascending: false })
+    : { data: [], error: null };
+  if (orgError) return void res.status(500).json({ detail: orgError.message });
 
+  // Transitional: also include legacy shares (shared_with my email) until the
+  // shared_with model is fully retired.
   const { data: sharedProjects, error: sharedError } = userEmail
     ? await db
         .from("projects")
@@ -47,9 +55,15 @@ projectsRouter.get("/", requireAuth, async (req, res) => {
   if (sharedError)
     return void res.status(500).json({ detail: sharedError.message });
 
-  const projects = [...(ownProjects ?? []), ...(sharedProjects ?? [])].sort(
+  // De-dupe (a shared project may also be in the active org).
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const p of [...(orgProjects ?? []), ...(sharedProjects ?? [])]) {
+    byId.set((p as { id: string }).id, p as Record<string, unknown>);
+  }
+  const projects = [...byId.values()].sort(
     (a, b) =>
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      new Date(b.created_at as string).getTime() -
+      new Date(a.created_at as string).getTime(),
   );
 
   const result = await Promise.all(
@@ -110,6 +124,8 @@ projectsRouter.post("/", requireAuth, async (req, res) => {
   }
 
   const db = createServerSupabase();
+  // Stamp the active organization (X-Org-Id header, else personal org).
+  const active = await resolveActiveOrg(req, userId, userEmail, db);
   const { data, error } = await db
     .from("projects")
     .insert({
@@ -117,6 +133,8 @@ projectsRouter.post("/", requireAuth, async (req, res) => {
       name: name.trim(),
       cm_number: cm_number ?? null,
       shared_with: cleanedSharedWith,
+      org_id: active?.orgId ?? null,
+      team_id: active?.teamId ?? null,
     })
     .select("*")
     .single();

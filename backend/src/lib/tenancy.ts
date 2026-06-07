@@ -108,6 +108,47 @@ export async function getPermissions(
   );
 }
 
+/**
+ * Resolve the "active organization" for a resource operation:
+ *   - the X-Org-Id header if present AND the user is an active member, else
+ *   - the user's personal org (auto-provisioned if missing).
+ * Also returns the org's default team id. Used by resource routes to stamp
+ * org_id/team_id on creates and to scope listings.
+ */
+export async function resolveActiveOrg(
+  req: Request,
+  userId: string,
+  email: string | null | undefined,
+  db: Db,
+): Promise<{ orgId: string; teamId: string | null } | null> {
+  const headerOrg = req.header("x-org-id") ?? undefined;
+  let orgId: string | null = null;
+  if (headerOrg) {
+    const m = await getMembership(headerOrg, userId, db);
+    if (m) orgId = headerOrg;
+  }
+  if (!orgId) {
+    orgId = await ensurePersonalOrg(userId, email, db);
+  }
+  if (!orgId) return null;
+  const { data: team } = await db
+    .from("teams")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("is_default", true)
+    .maybeSingle();
+  return { orgId, teamId: (team as { id: string } | null)?.id ?? null };
+}
+
+/** Org ids the user can access (active membership). Convenience wrapper. */
+export async function accessibleOrgIds(
+  userId: string,
+  db: Db,
+): Promise<string[]> {
+  const m = await listMemberships(userId, db);
+  return m.map((x) => x.org_id);
+}
+
 /** Write an audit row (best-effort; never throws into the request path). */
 export async function writeAudit(
   orgId: string | null,

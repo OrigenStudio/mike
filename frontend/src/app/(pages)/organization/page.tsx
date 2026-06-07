@@ -14,8 +14,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/contexts/AuthContext";
+import { useOrg } from "@/app/contexts/OrgContext";
 import {
-  listOrganizations,
   createOrganization,
   listMembers,
   changeMemberRole,
@@ -37,13 +37,11 @@ const ROLES: OrgRole[] = ["owner", "admin", "member"];
 
 export default function OrganizationPage() {
   const { user } = useAuth();
-  const [orgs, setOrgs] = useState<Organization[]>([]);
-  const [current, setCurrent] = useState<Organization | null>(null);
+  const { orgs, activeOrg: current, loading, setActiveOrg, refresh } = useOrg();
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [members, setMembers] = useState<OrgMember[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [invites, setInvites] = useState<Invitation[]>([]);
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,12 +53,12 @@ export default function OrganizationPage() {
 
   const canManage = current?.my_role === "owner" || current?.my_role === "admin";
 
-  const loadOrgDetail = useCallback(async (org: Organization) => {
+  const loadDetail = useCallback(async (orgId: string) => {
     try {
       const [m, t, inv] = await Promise.all([
-        listMembers(org.id).catch(() => []),
-        listTeams(org.id).catch(() => []),
-        listInvitations(org.id).catch(() => []),
+        listMembers(orgId).catch(() => []),
+        listTeams(orgId).catch(() => []),
+        listInvitations(orgId).catch(() => []),
       ]);
       setMembers(m);
       setTeams(t);
@@ -70,35 +68,15 @@ export default function OrganizationPage() {
     }
   }, []);
 
-  const loadOrgs = useCallback(async () => {
-    setLoading(true);
-    try {
-      const list = await listOrganizations();
-      setOrgs(list);
-      const cur = current
-        ? list.find((o) => o.id === current.id) ?? list[0]
-        : list[0];
-      setCurrent(cur ?? null);
-      if (cur) await loadOrgDetail(cur);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load organizations");
-    } finally {
-      setLoading(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadOrgDetail]);
-
   useEffect(() => {
-    loadOrgs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (current?.id) loadDetail(current.id);
+  }, [current?.id, loadDetail]);
 
-  async function switchTo(org: Organization) {
-    setCurrent(org);
+  function switchTo(org: Organization) {
+    setActiveOrg(org.id);
     setSwitcherOpen(false);
     setLastInviteUrl(null);
     setError(null);
-    await loadOrgDetail(org);
   }
 
   async function handleCreateOrg() {
@@ -107,8 +85,9 @@ export default function OrganizationPage() {
     try {
       const org = await createOrganization(newOrg.trim());
       setNewOrg("");
-      await loadOrgs();
-      await switchTo({ ...org, my_role: "owner" });
+      setSwitcherOpen(false);
+      await refresh();
+      setActiveOrg(org.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Create failed");
     } finally {
@@ -124,7 +103,7 @@ export default function OrganizationPage() {
       const inv = await createInvitation(current.id, inviteEmail.trim(), inviteRole);
       setInviteEmail("");
       if (inv.accept_url) setLastInviteUrl(inv.accept_url);
-      await loadOrgDetail(current);
+      await loadDetail(current.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Invite failed");
     } finally {
@@ -136,7 +115,7 @@ export default function OrganizationPage() {
     if (!current) return;
     try {
       await changeMemberRole(current.id, m.user_id, role);
-      await loadOrgDetail(current);
+      await loadDetail(current.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Role change failed");
     }
@@ -146,7 +125,7 @@ export default function OrganizationPage() {
     if (!current) return;
     try {
       await removeMember(current.id, m.user_id);
-      await loadOrgDetail(current);
+      await loadDetail(current.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Remove failed");
     }
@@ -158,7 +137,7 @@ export default function OrganizationPage() {
     try {
       await createTeam(current.id, newTeam.trim());
       setNewTeam("");
-      await loadOrgDetail(current);
+      await loadDetail(current.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Create team failed");
     } finally {
@@ -223,7 +202,8 @@ export default function OrganizationPage() {
         )}
         {current && (
           <p className="mt-1 text-xs text-gray-500">
-            Your role: <span className="font-medium">{current.my_role}</span>
+            Your role: <span className="font-medium">{current.my_role}</span> · switching here
+            changes which org&apos;s projects you see across the app.
           </p>
         )}
       </div>
@@ -344,7 +324,10 @@ export default function OrganizationPage() {
                   {inv.email} · <span className="capitalize text-gray-500">{inv.role}</span>
                 </span>
                 <button
-                  onClick={() => current && revokeInvitation(current.id, inv.id).then(() => loadOrgDetail(current))}
+                  onClick={() =>
+                    current &&
+                    revokeInvitation(current.id, inv.id).then(() => loadDetail(current.id))
+                  }
                   className="text-gray-400 hover:text-red-600"
                   title="Revoke"
                 >
@@ -375,7 +358,10 @@ export default function OrganizationPage() {
               </span>
               {canManage && !t.is_default && (
                 <button
-                  onClick={() => current && deleteTeam(current.id, t.id).then(() => loadOrgDetail(current))}
+                  onClick={() =>
+                    current &&
+                    deleteTeam(current.id, t.id).then(() => loadDetail(current.id))
+                  }
                   className="text-gray-400 hover:text-red-600"
                   title="Delete team"
                 >

@@ -45,6 +45,26 @@ async function getAuthHeader(): Promise<Record<string, string>> {
     return { Authorization: `Bearer ${session.access_token}` };
 }
 
+// Active organization context. Sent as X-Org-Id so the backend scopes
+// resources to the org the user is currently viewing. Initialized from
+// localStorage so it's set even before OrgProvider mounts.
+let activeOrgId: string | null =
+    typeof window !== "undefined"
+        ? localStorage.getItem("activeOrgId")
+        : null;
+
+export function setActiveOrgId(orgId: string | null): void {
+    activeOrgId = orgId;
+    if (typeof window !== "undefined") {
+        if (orgId) localStorage.setItem("activeOrgId", orgId);
+        else localStorage.removeItem("activeOrgId");
+    }
+}
+
+export function getActiveOrgId(): string | null {
+    return activeOrgId;
+}
+
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     const authHeaders = await getAuthHeader();
     const { headers: initHeaders, ...restInit } = init ?? {};
@@ -54,6 +74,7 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
         headers: {
             Accept: "application/json",
             ...authHeaders,
+            ...(activeOrgId ? { "X-Org-Id": activeOrgId } : {}),
             ...(initHeaders as Record<string, string> | undefined),
         },
     });
